@@ -1,0 +1,29 @@
+[package]
+name = "ark-experimentation"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ark-ff = "0.4"
+ark-std = "0.4"
+sha2 = "0.10"
+sha3 = "0.10"
+blake2 = "0.10"
+rand = "0.8"
+num-traits = "0.2.16"
+num-bigint = "0.4"
+ark-serialize = "0.4"
+ark-poly = "0.4"
+digest = "0.10"
+half = { version = "2.3.1", features = ["num-traits"] }
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "arithmetic"
+path = "benches/arithmetic.rs"
+harness = false
+
