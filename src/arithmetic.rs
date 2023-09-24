@@ -276,79 +276,136 @@ pub mod single_precision {
 
         /// Adapted from: https://github.com/calccrypto/uint128_t/blob/master/uint128_t.cpp
         fn mul(self, rhs: Self) -> Self::Output {
+            // // split values into 4 32-bit parts
+            // let top = {
+            //     let v0 = self.0[0].0 / 256.0;
+            //     let v1 = self.0[1].0 / 256.0;
+            //     [
+            //         v1.trunc(),
+            //         v1.fract() * 256.0,
+            //         v0.trunc(),
+            //         v0.fract() * 256.0,
+            //     ]
+            //     .map(U16)
+            // };
+            // let bottom = {
+            //     let v0 = rhs.0[0].0 / 256.0;
+            //     let v1 = rhs.0[1].0 / 256.0;
+            //     [
+            //         v1.trunc(),
+            //         v1.fract() * 256.0,
+            //         v0.trunc(),
+            //         v0.fract() * 256.0,
+            //     ]
+            //     .map(U16)
+            // };
+
+            // let mut prod = [[0.0; 4]; 4];
+
+            // // multiply each component of the values
+            // for y in (0..4).rev() {
+            //     for x in (0..4).rev() {
+            //         prod[3 - x][y] = (top[x] * bottom[y]).0;
+            //     }
+            // }
+
             // split values into 4 32-bit parts
             let top = {
                 let v0 = self.0[0].0 / 256.0;
                 let v1 = self.0[1].0 / 256.0;
                 [
-                    v1.trunc(),
-                    v1.fract() * 256.0,
-                    v0.trunc(),
-                    v0.fract() * 256.0,
+                    v1.trunc() / 16.0,
+                    v1.fract() * 16.0,
+                    v0.trunc() / 16.0,
+                    v0.fract() * 16.0,
                 ]
-                .map(U16)
             };
             let bottom = {
                 let v0 = rhs.0[0].0 / 256.0;
                 let v1 = rhs.0[1].0 / 256.0;
                 [
-                    v1.trunc(),
-                    v1.fract() * 256.0,
-                    v0.trunc(),
-                    v0.fract() * 256.0,
+                    v1.trunc() / 16.0,
+                    v1.fract() * 16.0,
+                    v0.trunc() / 16.0,
+                    v0.fract() * 16.0,
                 ]
-                .map(U16)
             };
 
             let mut prod = [[0.0; 4]; 4];
 
-            // multiply each component of the values
-            for y in (0..4).rev() {
-                for x in (0..4).rev() {
-                    prod[3 - x][y] = (top[x] * bottom[y]).0;
-                }
+            // // multiply each component of the values
+            // for y in (0..4).rev() {
+            //     for x in (0..4).rev() {
+            //         // prod[3 - x][y] = (top[x] * bottom[y]).0;
+            //         let h = top[x].0 * bottom[y].0;
+            //         let l = top[x].0.mul_add(bottom[y].0, -h);
+            //         let b = h * U16::MODULUS_INV;
+            //         let c = b.floor();
+            //         let d = (-c).mul_add(U16::MODULUS, h);
+            //         prod[3 - x][y] = d + l;
+            //     }
+            // }
+
+            #[inline]
+            fn mul(a: f32, b: f32) -> f32 {
+                let h = a * b;
+                let l = a.mul_add(b, -h);
+                let b = h * U16::MODULUS_INV;
+                let c = b.floor();
+                let d = (-c).mul_add(U16::MODULUS, h);
+                d + l
             }
 
-            for row in &mut prod {
-                for v in row {
-                    *v /= 256.0;
-                }
-            }
+            prod[0][3] = mul(top[3], bottom[3]);
+            prod[0][2] = mul(top[3], bottom[2]);
+            prod[0][1] = mul(top[3], bottom[1]);
+            prod[0][0] = mul(top[3], bottom[0]);
+
+            prod[1][3] = mul(top[2], bottom[3]);
+            prod[1][2] = mul(top[2], bottom[2]);
+            prod[1][1] = mul(top[2], bottom[1]);
+
+            prod[2][3] = mul(top[1], bottom[3]);
+            prod[2][2] = mul(top[1], bottom[2]);
+
+            prod[3][3] = mul(top[0], bottom[3]);
+
+            // for row in &mut prod {
+            //     for v in row {
+            //         *v /= 256.0;
+            //     }
+            // }
 
             // first row
             let mut fourth32 = prod[0][3].fract() * 256.0;
-            let mut third32 = prod[0][2].fract() * 256.0 + prod[0][3].trunc();
-            let mut second32 = prod[0][1].fract() * 256.0 + prod[0][2].trunc();
-            let mut first32 = prod[0][0].fract() * 256.0 + prod[0][1].trunc();
+            let mut third32 = prod[0][2].fract().mul_add(256.0, prod[0][3].trunc());
+            let mut second32 = prod[0][1].fract().mul_add(256.0, prod[0][2].trunc());
+            let mut first32 = prod[0][0].fract().mul_add(256.0, prod[0][1].trunc());
 
             // second row
-            third32 += prod[1][3].fract() * 256.0;
-            second32 += prod[1][2].fract() * 256.0 + prod[1][3].trunc();
-            first32 += prod[1][1].fract() * 256.0 + prod[1][2].trunc();
+            third32 = prod[1][3].fract().mul_add(256.0, third32);
+            second32 += prod[1][2].fract().mul_add(256.0, prod[1][3].trunc());
+            first32 += prod[1][1].fract().mul_add(256.0, prod[1][2].trunc());
 
             // third row
-            second32 += prod[2][3].fract() * 256.0;
-            first32 += prod[2][2].fract() * 256.0 + prod[2][3].trunc();
+            second32 = prod[2][3].fract().mul_add(256.0, second32);
+            first32 += prod[2][2].fract().mul_add(256.0, prod[2][3].trunc());
 
             // fourth row
-            first32 += prod[3][3].fract() * 256.0;
+            first32 = prod[3][3].fract().mul_add(256.0, first32);
 
-            // move carry to next digit
-            third32 += (fourth32 / 256.0).trunc();
-            second32 += (third32 / 256.0).trunc();
-            first32 += (second32 / 256.0).trunc();
+            let v0 = third32.mul_add(256.0, fourth32) / 65536.0;
+            let v1 = first32.mul_add(256.0, second32) / 65536.0;
 
-            // remove carry from current digit
-            fourth32 = (fourth32 / 256.0).fract() * 256.0;
-            third32 = (third32 / 256.0).fract() * 256.0;
-            second32 = (second32 / 256.0).fract() * 256.0;
-            first32 = (first32 / 256.0).fract() * 256.0;
+            let l0 = v0.fract() * 65536.0;
+            let mut l1 = v1.fract().mul_add(65536.0, v0.trunc());
+
+            if l1 >= 65536.0 {
+                l1 -= 65536.0;
+            }
 
             // combine components
-            U32([
-                U16(third32 * 256.0 + fourth32),
-                U16(first32 * 256.0 + second32),
-            ])
+            U32([U16(l0), U16(l1)])
         }
     }
 

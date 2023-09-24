@@ -6,6 +6,7 @@ use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
+use p3_mersenne_31::Mersenne31;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
@@ -46,12 +47,14 @@ where
 
 fn multiplication_benches(c: &mut Criterion) {
     bench_multiplication::<u32>(c, "native_u32");
+    bench_multiplication::<Mersenne31>(c, "plonky3_mersenne_31");
     bench_multiplication::<single_precision::U32>(c, "fp32_sim_u32");
     bench_multiplication::<double_precision::U32>(c, "fp64_sim_u32");
 }
 
 fn addition_benches(c: &mut Criterion) {
     bench_addition::<u32>(c, "native_u32");
+    bench_addition::<Mersenne31>(c, "plonky3_mersenne_31");
     bench_addition::<single_precision::U32>(c, "fp32_sim_u32");
     bench_addition::<double_precision::U32>(c, "fp64_sim_u32");
 }
