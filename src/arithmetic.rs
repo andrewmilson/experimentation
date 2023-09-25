@@ -48,7 +48,7 @@ pub mod half_precision {
             let h = self.0 * rhs.0;
             let l = mad_f16(self.0, rhs.0, -h);
             let b = h * Self::MODULUS_INV;
-            let c = b.floor();
+            let c = b.trunc();
             let d = mad_f16(-c, Self::MODULUS, h);
             let e = d + l;
             Self(if e >= Self::MODULUS {
@@ -226,7 +226,7 @@ pub mod single_precision {
             let h = self.0 * rhs.0;
             let l = self.0.mul_add(rhs.0, -h);
             let b = h * Self::MODULUS_INV;
-            let c = b.floor();
+            let c = b.trunc();
             let d = (-c).mul_add(Self::MODULUS, h);
             let e = d + l;
             Self(if e >= Self::MODULUS {
@@ -239,6 +239,8 @@ pub mod single_precision {
         }
     }
 
+    /// Stores a u32 across two f32s as `x1 * 2^16 + x0`
+    /// Where `x0 ∈ [0, 2^16)` and `x1 ∈ [0, 2^16)`
     #[repr(transparent)]
     #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
     pub struct U32([U16; 2]);
@@ -273,7 +275,6 @@ pub mod single_precision {
 
     impl Mul for U32 {
         type Output = Self;
-
         /// Adapted from: https://github.com/calccrypto/uint128_t/blob/master/uint128_t.cpp
         fn mul(self, rhs: Self) -> Self::Output {
             // // split values into 4 32-bit parts
@@ -340,7 +341,7 @@ pub mod single_precision {
             //         let h = top[x].0 * bottom[y].0;
             //         let l = top[x].0.mul_add(bottom[y].0, -h);
             //         let b = h * U16::MODULUS_INV;
-            //         let c = b.floor();
+            //         let c = b.trunc();
             //         let d = (-c).mul_add(U16::MODULUS, h);
             //         prod[3 - x][y] = d + l;
             //     }
@@ -351,7 +352,7 @@ pub mod single_precision {
                 let h = a * b;
                 let l = a.mul_add(b, -h);
                 let b = h * U16::MODULUS_INV;
-                let c = b.floor();
+                let c = b.trunc();
                 let d = (-c).mul_add(U16::MODULUS, h);
                 d + l
             }
@@ -415,6 +416,93 @@ pub mod single_precision {
         }
     }
 
+    /// Stores a u32 across two f32s as `x1 * 2^11 + x0`
+    /// Where `x0 ∈ [0, 2^11)` and `x1 ∈ [0, 2^21)`
+    #[repr(transparent)]
+    #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+    pub struct U31([f32; 2]);
+
+    impl U31 {
+        const MASK_11_BITS: f32 = 0b11111111111 as f32;
+        const MASK_20_BITS: f32 = 0b11111111111111111111 as f32;
+
+        #[inline]
+        #[must_use]
+        pub const fn new(v: u32) -> Self {
+            Self([
+                (v & Self::MASK_11_BITS as u32) as f32,
+                ((v >> 11) & Self::MASK_20_BITS as u32) as f32,
+            ])
+        }
+    }
+
+    impl Add for U31 {
+        type Output = Self;
+
+        fn add(self, rhs: Self) -> Self::Output {
+            let mut l0 = self.0[0] + rhs.0[0];
+            let mut l1 = self.0[1] + rhs.0[1];
+
+            if l0 >= (Self::MASK_11_BITS + 1.0) {
+                l0 -= Self::MASK_11_BITS + 1.0;
+                l1 += 1.0;
+            }
+
+            if l1 >= (Self::MASK_20_BITS + 1.0) {
+                l1 -= Self::MASK_20_BITS + 1.0;
+            }
+
+            Self([l0, l1])
+        }
+    }
+
+    impl Mul for U31 {
+        type Output = Self;
+
+        /// Adapted from: https://github.com/calccrypto/uint128_t/blob/master/uint128_t.cpp
+        fn mul(self, rhs: Self) -> Self {
+            let tmp0 = (self.0[0] * rhs.0[0]) / (Self::MASK_11_BITS + 1.0);
+
+            let l0 = tmp0.fract() * (Self::MASK_11_BITS + 1.0);
+            let mut l1 = tmp0.trunc();
+
+            /// Multiplication `a * b % 2^20`
+            /// Where `a, b ∈ [0, 2^20)`
+            #[inline]
+            fn mul<const MODULUS: u32>(a: f32, b: f32) -> f32 {
+                let h = a * b;
+                let l = a.mul_add(b, -h);
+                let b = h * (1.0 / MODULUS as f32);
+                let c = b.trunc();
+                let d = (-c).mul_add(MODULUS as f32, h);
+                d + l
+            }
+
+            l1 += mul::<{ Self::MASK_20_BITS as u32 + 1 }>(self.0[0], rhs.0[1]);
+            l1 += mul::<{ Self::MASK_20_BITS as u32 + 1 }>(self.0[1], rhs.0[0]);
+
+            if l1 >= (Self::MASK_20_BITS + 1.0) {
+                l1 -= Self::MASK_20_BITS + 1.0;
+            }
+
+            let tmp_lha = (self.0[1] / 512.0).fract() * (512.0 * 64.0);
+            let tmp_rhs = (rhs.0[1] / 512.0).fract() * (512.0 * 32.0);
+            l1 += mul::<{ Self::MASK_20_BITS as u32 + 1 }>(tmp_lha, tmp_rhs);
+
+            if l1 >= (Self::MASK_20_BITS + 1.0) {
+                l1 -= Self::MASK_20_BITS + 1.0;
+            }
+
+            U31([l0, l1])
+        }
+    }
+
+    impl Distribution<U31> for Standard {
+        fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> U31 {
+            U31::new(self.sample(rng))
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -422,9 +510,25 @@ pub mod single_precision {
         use rand::Rng;
         use rand::SeedableRng;
 
+        const MASK_31_BITS: u32 = 0b1111111111111111111111111111111;
+
         const U16_EDGE_CASES: [u16; 10] = [0, 1, 2, 3, 5, 7, 8, 0xFF, 0xFF00, 0xFFFF];
+
         const U32_EDGE_CASES: [u32; 10] =
             [0, 1, 2, 3, 5, 0xFF, 0xFF00, 0xFF0000, 0xFF000000, u32::MAX];
+
+        const U31_EDGE_CASES: [u32; 10] = [
+            0,
+            1,
+            2,
+            3,
+            5,
+            0xFF,
+            0xFF00,
+            0xFF0000,
+            0xFF000000 >> 1,
+            u32::MAX >> 1,
+        ];
 
         #[test]
         fn simulated_u16_multiplication() {
@@ -451,6 +555,21 @@ pub mod single_precision {
         }
 
         #[test]
+        fn simulated_u31_multiplication() {
+            let mut rng = StdRng::from_seed([1; 32]);
+            let edge_cases = (0..2048)
+                .map(|_| rng.gen::<u32>() & MASK_31_BITS)
+                .collect::<Vec<u32>>();
+            for &a in &edge_cases {
+                for &b in &edge_cases {
+                    let expected = U31::new(a.overflowing_mul(b).0 & MASK_31_BITS);
+                    let actual = U31::new(a) * U31::new(b);
+                    assert_eq!(expected, actual, "mismatch: `{a} * {b}`");
+                }
+            }
+        }
+
+        #[test]
         fn simulated_u16_addition() {
             for a in U16_EDGE_CASES {
                 for b in U16_EDGE_CASES {
@@ -467,6 +586,17 @@ pub mod single_precision {
                 for b in U32_EDGE_CASES {
                     let expected = U32::new(a.overflowing_add(b).0);
                     let actual = U32::new(a) + U32::new(b);
+                    assert_eq!(expected, actual, "mismatch: `{a} + {b}`");
+                }
+            }
+        }
+
+        #[test]
+        fn simulated_u31_addition() {
+            for a in U31_EDGE_CASES {
+                for b in U31_EDGE_CASES {
+                    let expected = U31::new(a.overflowing_add(b).0 & MASK_31_BITS);
+                    let actual = U31::new(a) + U31::new(b);
                     assert_eq!(expected, actual, "mismatch: `{a} + {b}`");
                 }
             }
@@ -517,7 +647,7 @@ pub mod double_precision {
             let h = self.0 * rhs.0;
             let l = self.0.mul_add(rhs.0, -h);
             let b = h * Self::MODULUS_INV;
-            let c = b.floor();
+            let c = b.trunc();
             let d = (-c).mul_add(Self::MODULUS, h);
             let e = d + l;
             Self(if e >= Self::MODULUS {
